@@ -38,6 +38,7 @@ export default function TeacherView({
   const [loading, setLoading] = React.useState(false);
   const [status, setStatus] = React.useState('');
   const isKeyMissing = !apiKeyConfigured;
+  const [showKeyWarning, setShowKeyWarning] = React.useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -92,6 +93,10 @@ export default function TeacherView({
 
   const handleProcess = async () => {
     if (files.length === 0) return;
+    if (isKeyMissing) {
+      setShowKeyWarning(true);
+      return;
+    }
     
     setLoading(true);
     setStatus('מעבד קבצים ומחלץ שאלות...');
@@ -128,6 +133,32 @@ export default function TeacherView({
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
+      {isKeyMissing && (
+        <div className="bg-red-50 border border-red-100 p-6 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-6 animate-in slide-in-from-top-4 duration-500">
+          <div className="flex items-center gap-4 text-red-800">
+            <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center text-red-600 shrink-0">
+              <AlertCircle size={24} />
+            </div>
+            <div>
+              <h4 className="text-lg font-black">מפתח ה-API חסר!</h4>
+              <p className="text-sm font-bold opacity-90">כדי להנגיש מבחנים ולהשתמש בבינה מלאכותית, עליך להגדיר מפתח Gemini API בהגדרות המערכת.</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => {
+              // This is a bit of a hack since we don't have direct access to setActiveTab here
+              // but we can trigger a custom event or rely on the parent's state if passed
+              const event = new CustomEvent('open-admin-settings');
+              window.dispatchEvent(event);
+            }}
+            className="bg-red-600 text-white px-8 py-3 rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-100 flex items-center gap-2 shrink-0"
+          >
+            <Settings size={18} />
+            עבור להגדרות עכשיו
+          </button>
+        </div>
+      )}
+
       {credits !== null && credits <= 1 && (
         <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3 text-amber-800">

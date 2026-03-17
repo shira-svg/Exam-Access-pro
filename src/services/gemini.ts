@@ -10,6 +10,10 @@ const getApiKey = () => {
   // Fallback to manual key if provided (this will be set from server config or user input)
   if (manualKey) return manualKey;
   
+  // Check for Vite environment variable (built-in at build time)
+  const viteKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (viteKey && viteKey !== "MY_GEMINI_API_KEY") return viteKey;
+  
   return null;
 };
 

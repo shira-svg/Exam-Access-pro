@@ -8,9 +8,10 @@ interface StudentViewProps {
   onBackToEdit?: () => void;
   isStudentOnly?: boolean;
   language?: string;
+  apiKeyConfigured?: boolean;
 }
 
-export default function StudentView({ testData, onBackToEdit, isStudentOnly, language = 'Hebrew' }: StudentViewProps) {
+export default function StudentView({ testData, onBackToEdit, isStudentOnly, language = 'Hebrew', apiKeyConfigured = true }: StudentViewProps) {
   const [playingId, setPlayingId] = React.useState<string | null>(null);
   const [playingIntro, setPlayingIntro] = React.useState(false);
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
@@ -49,6 +50,11 @@ export default function StudentView({ testData, onBackToEdit, isStudentOnly, lan
       } else if (testData.introAudioUrl) {
         audioUrl = testData.introAudioUrl;
       } else {
+        if (!apiKeyConfigured) {
+          alert("מפתח ה-API חסר. לא ניתן להפיק הקראה חדשה. יש לפנות למורה.");
+          setPlayingIntro(false);
+          return;
+        }
         const result = await generateSpeech(testData.introduction, language);
         audioUrl = result.url;
       }
@@ -102,6 +108,11 @@ export default function StudentView({ testData, onBackToEdit, isStudentOnly, lan
         audioUrl = q.audioUrl;
       } else {
         // Generate on demand if nothing exists
+        if (!apiKeyConfigured) {
+          alert("מפתח ה-API חסר. לא ניתן להפיק הקראה חדשה. יש לפנות למורה.");
+          setPlayingId(null);
+          return;
+        }
         const result = await generateSpeech(q.text, language);
         audioUrl = result.url;
       }

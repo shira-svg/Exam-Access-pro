@@ -900,9 +900,14 @@ export default function App() {
 
     window.addEventListener('message', handleMessage);
     window.addEventListener('storage', handleStorage);
+    
+    const handleOpenAdmin = () => setActiveTab('admin');
+    window.addEventListener('open-admin-settings', handleOpenAdmin);
+
     return () => {
       window.removeEventListener('message', handleMessage);
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('open-admin-settings', handleOpenAdmin);
     };
   }, []);
 
@@ -923,6 +928,24 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans pb-20 text-right" dir="rtl">
+      {/* API Key Warning Banner */}
+      {!apiKeyConfigured && isLoggedIn && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 flex items-center justify-center gap-3 text-amber-800 sticky top-0 z-[60] backdrop-blur-md bg-amber-50/90">
+          <AlertCircle size={18} className="shrink-0" />
+          <p className="text-sm font-bold">
+            מפתח ה-API של Gemini חסר. חלק מהתכונות (הקראה, עיבוד תמונות) לא יעבדו עד שתגדיר אותו בהגדרות.
+          </p>
+          {(userEmail === 'shiraroth.z@gmail.com' || userEmail === 'shira@lomdot.org') && (
+            <button 
+              onClick={() => setActiveTab('admin')}
+              className="text-xs bg-amber-200 hover:bg-amber-300 px-3 py-1 rounded-lg font-black transition-colors"
+            >
+              להגדרות
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Profile Modal */}
       <AnimatePresence>
         {showProfileModal && (
@@ -1446,7 +1469,20 @@ export default function App() {
               </motion.div>
             ) : activeTab === 'student' ? (
               <motion.div key="student" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-                {testData ? <StudentView testData={testData} onBackToEdit={() => { setActiveTab('teacher'); setIsEditing(true); }} isStudentOnly={isStudentOnly} language={testLanguage} /> : <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-200"><GraduationCap size={48} className="mx-auto text-slate-300 mb-4" /><h3 className="text-xl font-bold text-slate-800">אין מבחן זמין</h3></div>}
+                {testData ? (
+                  <StudentView 
+                    testData={testData} 
+                    onBackToEdit={() => { setActiveTab('teacher'); setIsEditing(true); }} 
+                    isStudentOnly={isStudentOnly} 
+                    language={testLanguage}
+                    apiKeyConfigured={apiKeyConfigured}
+                  />
+                ) : (
+                  <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-200">
+                    <GraduationCap size={48} className="mx-auto text-slate-300 mb-4" />
+                    <h3 className="text-xl font-bold text-slate-800">אין מבחן זמין</h3>
+                  </div>
+                )}
               </motion.div>
             ) : activeTab === 'pricing' ? (
               <motion.div key="pricing" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}><PricingPage userEmail={userEmail} userName={userName} /></motion.div>

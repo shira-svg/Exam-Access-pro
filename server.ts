@@ -8,6 +8,7 @@ import nodemailer from "nodemailer";
 import bcrypt from "bcryptjs";
 import fs from "fs";
 import admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
 import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,8 +22,8 @@ if (!admin.apps.length) {
 }
 
 const db = firebaseConfig.firestoreDatabaseId 
-  ? (admin.app() as any).firestore(firebaseConfig.firestoreDatabaseId)
-  : admin.firestore();
+  ? getFirestore(admin.app(), firebaseConfig.firestoreDatabaseId)
+  : getFirestore(admin.app());
 
 // Email Transporter Setup
 const getSetting = async (key: string) => {
@@ -1005,7 +1006,9 @@ async function startServer() {
       const dbKey = await getSetting("GEMINI_API_KEY");
       const key = dbKey || envKey;
       
-      const isAvailable = !!key && key !== "MY_GEMINI_API_KEY" && key.length > 10;
+      // Be more permissive with the key check
+      const isAvailable = !!key && key.trim() !== "" && key !== "MY_GEMINI_API_KEY";
+      
       res.json({ 
         systemKeyAvailable: isAvailable,
         apiKey: isAvailable ? key : null,
