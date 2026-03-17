@@ -29,9 +29,15 @@ if (firebaseConfig.firestoreDatabaseId) {
 // Email Transporter Setup
 const getSetting = async (key: string) => {
   try {
+    // Check if db is initialized
+    if (!db) return undefined;
     const doc = await db.collection("settings").doc(key).get();
     return doc.exists ? doc.data()?.value : undefined;
-  } catch (e) {
+  } catch (e: any) {
+    // If it's a NOT_FOUND error, it likely means the collection or database isn't ready yet
+    if (e.code === 5 || (e.message && e.message.includes('NOT_FOUND'))) {
+      return undefined;
+    }
     console.error("Error getting setting:", e);
     return undefined;
   }

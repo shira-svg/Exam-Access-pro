@@ -51,11 +51,20 @@ export default function App() {
   const [isGeneratingAudio, setIsGeneratingAudio] = React.useState(false);
   const [generatingQuestionIndex, setGeneratingQuestionIndex] = React.useState<number | null>(null);
   const [audioProgress, setAudioProgress] = React.useState(0);
-  const [apiKeyConfigured, setApiKeyConfigured] = React.useState(hasApiKey());
-  const [manualKey, setManualKey] = React.useState('');
-  const [showManualInput, setShowManualInput] = React.useState(false);
   const [isLoadingTest, setIsLoadingTest] = React.useState(false);
   const [systemKeyAvailable, setSystemKeyAvailable] = React.useState(false);
+  const [apiKeyConfigured, setApiKeyConfigured] = React.useState(false);
+  const [smtpSettings, setSmtpSettings] = React.useState({
+    SMTP_HOST: '',
+    SMTP_PORT: '587',
+    SMTP_USER: '',
+    SMTP_PASS: '',
+    LOGO_URL: '',
+    GATE_LOGO_URL: '',
+    APP_NAME: 'ExamAccess Pro',
+    SUPPORT_EMAIL: 'shira@lomdot.org',
+    GEMINI_API_KEY: ''
+  });
 
   const [appUrl, setAppUrl] = React.useState('');
   const [accessCode, setAccessCode] = React.useState(localStorage.getItem('accessCode') || '');
@@ -158,6 +167,15 @@ export default function App() {
     return () => unsubscribe();
   }, [isLoggedIn, userEmail]);
 
+  // Sync apiKeyConfigured with settings and system availability
+  React.useEffect(() => {
+    const hasKey = systemKeyAvailable || (!!smtpSettings.GEMINI_API_KEY && smtpSettings.GEMINI_API_KEY.length > 10);
+    setApiKeyConfigured(hasKey);
+    if (smtpSettings.GEMINI_API_KEY) {
+      setManualApiKey(smtpSettings.GEMINI_API_KEY);
+    }
+  }, [systemKeyAvailable, smtpSettings.GEMINI_API_KEY]);
+
   const fetchConfig = async () => {
     try {
       const response = await fetch('/api/config');
@@ -167,7 +185,8 @@ export default function App() {
         setAppUrl(data.appUrl);
         if (data.apiKey) {
           setManualApiKey(data.apiKey);
-          setApiKeyConfigured(true);
+          // Also update smtpSettings so the UI shows it if needed
+          setSmtpSettings(prev => ({ ...prev, GEMINI_API_KEY: data.apiKey }));
         }
       }
     } catch (e) {
@@ -210,17 +229,6 @@ export default function App() {
   const [isNiqqudOpen, setIsNiqqudOpen] = React.useState(false);
 
   const [isSimulating, setIsSimulating] = React.useState(false);
-  const [smtpSettings, setSmtpSettings] = React.useState({
-    SMTP_HOST: '',
-    SMTP_PORT: '587',
-    SMTP_USER: '',
-    SMTP_PASS: '',
-    LOGO_URL: '',
-    GATE_LOGO_URL: '',
-    APP_NAME: 'ExamAccess Pro',
-    SUPPORT_EMAIL: 'shira@lomdot.org',
-    GEMINI_API_KEY: ''
-  });
   const [isSavingSettings, setIsSavingSettings] = React.useState(false);
   const [logoError, setLogoError] = React.useState(false);
 
@@ -256,7 +264,6 @@ export default function App() {
         
         if (pubData.GEMINI_API_KEY) {
           setManualApiKey(pubData.GEMINI_API_KEY);
-          setApiKeyConfigured(true);
         }
       }
     } catch (e) {
@@ -279,7 +286,6 @@ export default function App() {
       
       if (newSettings.GEMINI_API_KEY) {
         setManualApiKey(newSettings.GEMINI_API_KEY);
-        setApiKeyConfigured(true);
       }
     });
 
@@ -297,7 +303,6 @@ export default function App() {
       if (response.ok) {
         if (smtpSettings.GEMINI_API_KEY) {
           setManualApiKey(smtpSettings.GEMINI_API_KEY);
-          setApiKeyConfigured(true);
         }
         alert('הגדרות המייל נשמרו בהצלחה!');
       }
