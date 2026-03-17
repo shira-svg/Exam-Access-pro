@@ -5,6 +5,26 @@ import {
   X as CloseIcon, Volume2, Loader2, CheckCircle2, AlertCircle, Save, 
   Eraser, Upload, Image, Trash2, Info 
 } from 'lucide-react';
+import { auth, db } from './firebase';
+import { 
+  onAuthStateChanged, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
+  updateProfile
+} from 'firebase/auth';
+import { 
+  doc, 
+  onSnapshot, 
+  collection, 
+  query, 
+  where, 
+  orderBy,
+  getDoc,
+  setDoc
+} from 'firebase/firestore';
 import TeacherView from './components/TeacherView';
 import StudentView from './components/StudentView';
 import ContactPage from './components/ContactPage';
@@ -38,6 +58,105 @@ export default function App() {
   const [systemKeyAvailable, setSystemKeyAvailable] = React.useState(false);
 
   const [appUrl, setAppUrl] = React.useState('');
+  const [accessCode, setAccessCode] = React.useState(localStorage.getItem('accessCode') || '');
+  const [userEmail, setUserEmail] = React.useState(localStorage.getItem('userEmail') || '');
+  const [userName, setUserName] = React.useState(localStorage.getItem('userName') || '');
+  const [isLoggedIn, setIsLoggedIn] = React.useState(!!localStorage.getItem('userEmail'));
+  const [credits, setCredits] = React.useState<number | null>(null);
+  const [subscriptionType, setSubscriptionType] = React.useState<'free' | 'monthly' | 'admin'>('free');
+  const [userTests, setUserTests] = React.useState<any[]>([]);
+  const [isLoadingTests, setIsLoadingTests] = React.useState(false);
+  const [isVerifying, setIsVerifying] = React.useState(false);
+  const [testLanguage, setTestLanguage] = React.useState('Hebrew');
+  const [loginError, setLoginError] = React.useState('');
+  const [isGoogleLoggingIn, setIsGoogleLoggingIn] = React.useState(false);
+  const [authMode, setAuthMode] = React.useState<'login' | 'register' | 'accessCode'>('login');
+  const [loginEmail, setLoginEmail] = React.useState('');
+  const [loginPassword, setLoginPassword] = React.useState('');
+  const [loginName, setLoginName] = React.useState('');
+  const [isAuthReady, setIsAuthReady] = React.useState(false);
+
+  React.useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setIsLoggedIn(true);
+        setUserEmail(user.email || '');
+        setUserName(user.displayName || '');
+        localStorage.setItem('userEmail', user.email || '');
+        localStorage.setItem('userName', user.displayName || '');
+      } else {
+        setIsLoggedIn(false);
+        setUserEmail('');
+        setUserName('');
+        setCredits(null);
+        localStorage.removeItem('userEmail');
+        localStorage.removeItem('userName');
+        localStorage.removeItem('accessCode');
+      }
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  React.useEffect(() => {
+    if (!isLoggedIn || !userEmail) return;
+
+    const userRef = doc(db, 'users', userEmail.toLowerCase().trim());
+    const unsubscribe = onSnapshot(userRef, (doc) => {
+      if (doc.exists()) {
+        const data = doc.data();
+        setCredits(data.credits);
+        setSubscriptionType(data.subscription_type || 'free');
+      }
+    });
+
+    return () => unsubscribe();
+  }, [isLoggedIn, userEmail]);
+
+  React.useEffect(() => {
+    if (!isLoggedIn || !userEmail) return;
+    if (subscriptionType !== 'monthly' && userEmail !== 'shira@lomdot.org' && userEmail !== 'shiraroth.z@gmail.com') return;
+
+    const testsQuery = query(
+      collection(db, 'tests'), 
+      where('ownerEmail', '==', userEmail.toLowerCase().trim()),
+      orderBy('createdAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(testsQuery, (snapshot) => {
+      const tests = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: data.id,
+          title: JSON.parse(data.data).title || "מבחן ללא כותרת",
+          created_at: data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString()
+        };
+      });
+      setUserTests(tests);
+    });
+
+    return () => unsubscribe();
+  }, [isLoggedIn, userEmail, subscriptionType]);
+
+  React.useEffect(() => {
+    if (!isLoggedIn || !userEmail) return;
+
+    const codesQuery = query(
+      collection(db, 'access_codes'), 
+      where('redeemedBy', '==', userEmail.toLowerCase().trim()),
+      orderBy('redeemedAt', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(codesQuery, (snapshot) => {
+      const codes = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setUserCodes(codes);
+    });
+
+    return () => unsubscribe();
+  }, [isLoggedIn, userEmail]);
 
   const fetchConfig = async () => {
     try {
@@ -55,22 +174,6 @@ export default function App() {
       console.error("Failed to fetch system config", e);
     }
   };
-  const [accessCode, setAccessCode] = React.useState(localStorage.getItem('accessCode') || '');
-  const [userEmail, setUserEmail] = React.useState(localStorage.getItem('userEmail') || '');
-  const [userName, setUserName] = React.useState(localStorage.getItem('userName') || '');
-  const [isLoggedIn, setIsLoggedIn] = React.useState(!!localStorage.getItem('userEmail'));
-  const [credits, setCredits] = React.useState<number | null>(null);
-  const [subscriptionType, setSubscriptionType] = React.useState<'free' | 'monthly' | 'admin'>('free');
-  const [userTests, setUserTests] = React.useState<any[]>([]);
-  const [isLoadingTests, setIsLoadingTests] = React.useState(false);
-  const [isVerifying, setIsVerifying] = React.useState(false);
-  const [testLanguage, setTestLanguage] = React.useState('Hebrew');
-  const [loginError, setLoginError] = React.useState('');
-  const [isGoogleLoggingIn, setIsGoogleLoggingIn] = React.useState(false);
-  const [authMode, setAuthMode] = React.useState<'login' | 'register' | 'accessCode'>('login');
-  const [loginEmail, setLoginEmail] = React.useState('');
-  const [loginPassword, setLoginPassword] = React.useState('');
-  const [loginName, setLoginName] = React.useState('');
   
   // Redemption States
   const [redeemCode, setRedeemCode] = React.useState('');
@@ -267,15 +370,22 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('accessCode'); 
-    localStorage.removeItem('userEmail');
-    localStorage.removeItem('userName');
-    setIsLoggedIn(false); 
-    setAccessCode('');
-    setUserName('');
-    setUserEmail('');
-    setShowProfileModal(false);
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      localStorage.removeItem('accessCode'); 
+      localStorage.removeItem('userEmail');
+      localStorage.removeItem('userName');
+      setIsLoggedIn(false); 
+      setAccessCode('');
+      setUserName('');
+      setUserEmail('');
+      setCredits(null);
+      setShowProfileModal(false);
+      setActiveTab('teacher');
+    } catch (e) {
+      console.error("Logout failed", e);
+    }
   };
 
   const fetchUserInfo = async (code: string) => {
@@ -334,31 +444,15 @@ export default function App() {
       setIsVerifying(true);
       setLoginError('');
       try {
-        const response = await fetch('/api/auth/login-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: loginEmail, password: loginPassword })
-        });
-        if (response.ok) {
-          const data = await response.json();
-          localStorage.setItem('accessCode', data.email);
-          localStorage.setItem('userEmail', data.email);
-          if (data.name) localStorage.setItem('userName', data.name);
-          setIsLoggedIn(true);
-          setUserEmail(data.email);
-          setUserName(data.name || '');
-          setCredits(data.credits);
-          setSubscriptionType(data.subscriptionType || 'free');
-          setAccessCode(data.email);
-          if (data.subscriptionType === 'monthly' || data.email === 'shira@lomdot.org' || data.email === 'shiraroth.z@gmail.com') {
-            fetchUserTests(data.email);
-          }
+        await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+        // onAuthStateChanged will handle the state update
+      } catch (error: any) {
+        console.error("Login error:", error);
+        if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+          setLoginError('אימייל או סיסמה לא נכונים');
         } else {
-          const data = await response.json();
-          setLoginError(data.error || 'אימייל או סיסמה לא נכונים');
+          setLoginError('שגיאה בהתחברות. נסה שוב מאוחר יותר.');
         }
-      } catch (error) {
-        setLoginError('חלה שגיאה בחיבור לשרת');
       } finally {
         setIsVerifying(false);
       }
@@ -367,31 +461,26 @@ export default function App() {
       setIsVerifying(true);
       setLoginError('');
       try {
-        const response = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: loginEmail, password: loginPassword, name: loginName })
+        const userCredential = await createUserWithEmailAndPassword(auth, loginEmail, loginPassword);
+        await updateProfile(userCredential.user, { displayName: loginName });
+        
+        // Create user document in Firestore
+        await setDoc(doc(db, 'users', loginEmail.toLowerCase().trim()), {
+          email: loginEmail.toLowerCase().trim(),
+          name: loginName,
+          credits: 5,
+          createdAt: new Date(),
+          last_renewal_date: new Date()
         });
-        if (response.ok) {
-          const data = await response.json();
-          localStorage.setItem('accessCode', data.email);
-          localStorage.setItem('userEmail', data.email);
-          if (data.name) localStorage.setItem('userName', data.name);
-          setIsLoggedIn(true);
-          setUserEmail(data.email);
-          setUserName(data.name || '');
-          setCredits(data.credits);
-          setSubscriptionType(data.subscriptionType || 'free');
-          setAccessCode(data.email);
-          if (data.subscriptionType === 'monthly' || data.email === 'shira@lomdot.org' || data.email === 'shiraroth.z@gmail.com') {
-            fetchUserTests(data.email);
-          }
+        
+        // onAuthStateChanged will handle the state update
+      } catch (error: any) {
+        console.error("Registration error:", error);
+        if (error.code === 'auth/email-already-in-use') {
+          setLoginError('האימייל כבר נמצא בשימוש');
         } else {
-          const data = await response.json();
-          setLoginError(data.error || 'הרשמה נכשלה');
+          setLoginError('שגיאה בהרשמה. נסה שוב מאוחר יותר.');
         }
-      } catch (error) {
-        setLoginError('חלה שגיאה בחיבור לשרת');
       } finally {
         setIsVerifying(false);
       }
@@ -427,31 +516,29 @@ export default function App() {
     setIsGoogleLoggingIn(true);
     setLoginError('');
     try {
-      const response = await fetch(`/api/auth/google/url?origin=${encodeURIComponent(window.location.origin)}`);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Failed to get auth URL: ${response.status}`);
-      }
-      const { url } = await response.json();
+      const provider = new GoogleAuthProvider();
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
       
-      const width = 500;
-      const height = 600;
-      const left = window.screenX + (window.outerWidth - width) / 2;
-      const top = window.screenY + (window.outerHeight - height) / 2;
+      // Ensure user document exists in Firestore
+      const userRef = doc(db, 'users', user.email!.toLowerCase().trim());
+      const userDoc = await getDoc(userRef);
       
-      const authWindow = window.open(
-        url,
-        'google_oauth',
-        `width=${width},height=${height},left=${left},top=${top}`
-      );
-
-      if (!authWindow) {
-        setLoginError('הדפדפן חסם את החלון הקופץ. אנא אפשר חלונות קופצים.');
-        setIsGoogleLoggingIn(false);
+      if (!userDoc.exists()) {
+        await setDoc(userRef, {
+          email: user.email!.toLowerCase().trim(),
+          name: user.displayName,
+          credits: 5,
+          createdAt: new Date(),
+          last_renewal_date: new Date()
+        });
       }
-    } catch (e: any) {
-      console.error("Google login error:", e);
-      setLoginError(e.message || 'שגיאה בחיבור לגוגל');
+      
+      // onAuthStateChanged will handle the state update
+    } catch (error: any) {
+      console.error("Google Login error:", error);
+      setLoginError('שגיאה בהתחברות עם גוגל');
+    } finally {
       setIsGoogleLoggingIn(false);
     }
   };
@@ -469,10 +556,8 @@ export default function App() {
       });
       const data = await response.json();
       if (response.ok) {
-        setCredits(data.credits);
         setRedeemSuccess(true);
         setRedeemCode('');
-        fetchUserCodes();
       } else {
         setRedeemError(data.error || 'שגיאה במימוש הקוד');
       }
@@ -484,32 +569,11 @@ export default function App() {
   };
 
   const fetchUserCodes = async () => {
-    if (!userEmail) return;
-    try {
-      const response = await fetch(`/api/user/codes?email=${userEmail}`);
-      if (response.ok) {
-        const data = await response.json();
-        setUserCodes(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch user codes", e);
-    }
+    // Handled by onSnapshot
   };
 
   const fetchUserTests = async (email: string) => {
-    if (!email) return;
-    setIsLoadingTests(true);
-    try {
-      const response = await fetch(`/api/user/tests?email=${email}`);
-      if (response.ok) {
-        const data = await response.json();
-        setUserTests(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch user tests", e);
-    } finally {
-      setIsLoadingTests(false);
-    }
+    // Handled by onSnapshot
   };
 
   const handleNiqqudSelect = (char: string) => {

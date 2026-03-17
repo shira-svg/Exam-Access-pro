@@ -1,5 +1,5 @@
 import React from 'react';
-import { Upload, Loader2, FileText, CheckCircle, AlertCircle, X, Trash2, File as FileIcon, Settings, Edit3 } from 'lucide-react';
+import { Upload, Loader2, FileText, CheckCircle, AlertCircle, X, Trash2, File as FileIcon, Settings, Edit3, Star } from 'lucide-react';
 import { processTestImages, TestData } from '../services/gemini';
 import * as pdfjs from 'pdfjs-dist';
 import mammoth from 'mammoth';

@@ -1,31 +1,47 @@
 import "dotenv/config";
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
 import { fileURLToPath } from "url";
 import nodemailer from "nodemailer";
 import bcrypt from "bcryptjs";
 import fs from "fs";
+import admin from "firebase-admin";
+import firebaseConfig from "./firebase-applet-config.json" with { type: "json" };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("tests.db");
+// Initialize Firebase Admin
+if (!admin.apps.length) {
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
+}
+
+const db = admin.firestore();
+if (firebaseConfig.firestoreDatabaseId) {
+  // Note: In some SDK versions, you might need to specify the databaseId differently
+  // but for now we'll assume the default or configured one.
+}
 
 // Email Transporter Setup
-const getSetting = (key: string) => {
-  const stmt = db.prepare("SELECT value FROM settings WHERE key = ?");
-  const row = stmt.get(key) as { value: string } | undefined;
-  return row?.value;
+const getSetting = async (key: string) => {
+  try {
+    const doc = await db.collection("settings").doc(key).get();
+    return doc.exists ? doc.data()?.value : undefined;
+  } catch (e) {
+    console.error("Error getting setting:", e);
+    return undefined;
+  }
 };
 
-const createTransporter = () => {
-  let host = process.env.SMTP_HOST || getSetting("SMTP_HOST");
-  let portStr = process.env.SMTP_PORT || getSetting("SMTP_PORT") || "587";
-  let user = process.env.SMTP_USER || getSetting("SMTP_USER");
-  let pass = process.env.SMTP_PASS || getSetting("SMTP_PASS");
+const createTransporter = async () => {
+  let host = process.env.SMTP_HOST || await getSetting("SMTP_HOST");
+  let portStr = process.env.SMTP_PORT || await getSetting("SMTP_PORT") || "587";
+  let user = process.env.SMTP_USER || await getSetting("SMTP_USER");
+  let pass = process.env.SMTP_PASS || await getSetting("SMTP_PASS");
 
   if (!host || !user || !pass) {
     console.warn("SMTP settings not fully configured. Emails will be logged to console instead of sent.");
@@ -47,8 +63,8 @@ const createTransporter = () => {
 };
 
 const sendCodeEmail = async (email: string, code: string, credits: number) => {
-  const transporter = createTransporter();
-  const user = process.env.SMTP_USER || getSetting("SMTP_USER");
+  const transporter = await createTransporter();
+  const user = process.env.SMTP_USER || await getSetting("SMTP_USER");
   const subject = "קוד הגישה החדש שלך למערכת המבחנים";
   const html = `
     <div dir="rtl" style="font-family: sans-serif; padding: 20px; border: 1px solid #e2e8f0; rounded: 10px;">
@@ -88,96 +104,31 @@ const sendCodeEmail = async (email: string, code: string, credits: number) => {
   }
 };
 
-// Initialize database
-db.exec(`
-  CREATE TABLE IF NOT EXISTS tests (
-    id TEXT PRIMARY KEY,
-    data TEXT NOT NULL,
-    owner_email TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS users (
-    email TEXT PRIMARY KEY,
-    name TEXT,
-    password_hash TEXT,
-    credits INTEGER NOT NULL DEFAULT 5,
-    subscription_type TEXT DEFAULT 'free',
-    last_renewal_date DATETIME,
-    monthly_allowance INTEGER DEFAULT 0,
-    subscription_end_date DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS access_codes (
-    code TEXT PRIMARY KEY,
-    credits INTEGER NOT NULL,
-    used INTEGER DEFAULT 0,
-    used_by TEXT,
-    used_at DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS purchases (
-    id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    amount REAL,
-    credits INTEGER,
-    status TEXT,
-    transaction_id TEXT,
-    raw_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-`);
-
-// Migration: Ensure owner_email column exists in tests table
-try {
-  db.prepare("ALTER TABLE tests ADD COLUMN owner_email TEXT").run();
-} catch (e) {
-  // Column probably already exists
-}
-
-// Migration: Add subscription columns to users if they don't exist
-try {
-  db.exec("ALTER TABLE users ADD COLUMN name TEXT");
-} catch (e) {}
-try {
-  db.exec("ALTER TABLE users ADD COLUMN subscription_type TEXT DEFAULT 'free'");
-} catch (e) {}
-try {
-  db.exec("ALTER TABLE users ADD COLUMN last_renewal_date DATETIME");
-} catch (e) {}
-try {
-  db.exec("ALTER TABLE users ADD COLUMN monthly_allowance INTEGER DEFAULT 0");
-} catch (e) {}
-
-try {
-  db.exec("ALTER TABLE users ADD COLUMN subscription_end_date DATETIME");
-} catch (e) {}
-
 // Credit Renewal Logic
-const checkAndRenewCredits = (email: string) => {
-  const user = db.prepare("SELECT credits, subscription_type, last_renewal_date, monthly_allowance, subscription_end_date FROM users WHERE LOWER(email) = ?").get(email.toLowerCase()) as any;
+const checkAndRenewCredits = async (email: string) => {
+  const normalizedEmail = email.toLowerCase().trim();
+  const userRef = db.collection("users").doc(normalizedEmail);
+  const userDoc = await userRef.get();
   
-  if (!user || (user.subscription_type !== 'monthly' && user.subscription_type !== 'annual') || !user.monthly_allowance) return user?.credits;
+  if (!userDoc.exists) return 0;
+  const user = userDoc.data() as any;
+  
+  if ((user.subscription_type !== 'monthly' && user.subscription_type !== 'annual') || !user.monthly_allowance) return user.credits;
 
   const now = new Date();
   
   // Check if subscription has ended
   if (user.subscription_end_date) {
-    const endDate = new Date(user.subscription_end_date);
+    const endDate = user.subscription_end_date.toDate ? user.subscription_end_date.toDate() : new Date(user.subscription_end_date);
     if (now > endDate) {
-      db.prepare("UPDATE users SET subscription_type = 'free', monthly_allowance = 0 WHERE LOWER(email) = ?").run(email.toLowerCase());
+      await userRef.update({ subscription_type: 'free', monthly_allowance: 0 });
       return user.credits;
     }
   }
 
-  const lastRenewal = user.last_renewal_date ? new Date(user.last_renewal_date) : new Date(0);
+  const lastRenewal = user.last_renewal_date 
+    ? (user.last_renewal_date.toDate ? user.last_renewal_date.toDate() : new Date(user.last_renewal_date)) 
+    : new Date(0);
   
   // Calculate months passed since last renewal
   const diffTime = Math.abs(now.getTime() - lastRenewal.getTime());
@@ -185,36 +136,17 @@ const checkAndRenewCredits = (email: string) => {
   const monthsToRenew = Math.floor(diffDays / 30);
 
   if (monthsToRenew > 0) {
-    const newCredits = user.credits + (user.monthly_allowance * monthsToRenew);
-    db.prepare("UPDATE users SET credits = ?, last_renewal_date = CURRENT_TIMESTAMP WHERE LOWER(email) = ?").run(newCredits, email.toLowerCase());
+    const newCredits = (user.credits || 0) + (user.monthly_allowance * monthsToRenew);
+    await userRef.update({ 
+      credits: newCredits, 
+      last_renewal_date: admin.firestore.FieldValue.serverTimestamp() 
+    });
     console.log(`Renewed ${user.monthly_allowance * monthsToRenew} credits for ${email}. New balance: ${newCredits}`);
     return newCredits;
   }
 
   return user.credits;
 };
-
-// Create fictitious user and code for testing
-  try {
-    const testEmail = "shira@lomdot.org";
-    const testEmail2 = "shiraroth.z@gmail.com";
-    const testCode = "PRO-TEST-2026";
-    
-    const userStmt = db.prepare("INSERT INTO users (email, name, credits) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET name = excluded.name");
-    userStmt.run(testEmail, "שירה", 5);
-    userStmt.run(testEmail2, "שירה", 5);
-    
-    const codeStmt = db.prepare("INSERT OR IGNORE INTO access_codes (code, credits) VALUES (?, ?)");
-  codeStmt.run(testCode, 5); // A code that gives 5 credits
-
-  // Add the specific test code requested by the user
-  codeStmt.run("TEST123", 5);
-  userStmt.run("test@shira.com", "משתמש בדיקה", 5);
-  
-  console.log("Fictitious test data initialized.");
-} catch (e) {
-  console.error("Error initializing test data:", e);
-}
 
 async function startServer() {
   const app = express();
@@ -229,27 +161,32 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
 
   // API Routes
-  app.post("/api/auth/guest-login", (req, res) => {
+  app.post("/api/auth/guest-login", async (req, res) => {
     try {
       const guestEmail = "guest@examaccess.pro";
       const guestName = "אורח במערכת";
       
-      const checkStmt = db.prepare("SELECT email, name, credits FROM users WHERE email = ?");
-      let user = checkStmt.get(guestEmail) as { email: string; name: string; credits: number } | undefined;
+      const userRef = db.collection("users").doc(guestEmail);
+      const userDoc = await userRef.get();
       
-      if (!user) {
-        const insertStmt = db.prepare("INSERT INTO users (email, name, credits) VALUES (?, ?, ?)");
-        insertStmt.run(guestEmail, guestName, 10);
-        user = { email: guestEmail, name: guestName, credits: 10 };
+      if (!userDoc.exists) {
+        const userData = { 
+          email: guestEmail, 
+          name: guestName, 
+          credits: 10,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+        await userRef.set(userData);
+        res.json(userData);
+      } else {
+        res.json(userDoc.data());
       }
-      
-      res.json(user);
     } catch (error) {
       res.status(500).json({ error: "Guest login failed" });
     }
   });
 
-  app.post("/api/auth/verify", (req, res) => {
+  app.post("/api/auth/verify", async (req, res) => {
     try {
       const { code } = req.body;
       console.log("Verifying code/email:", code);
@@ -258,10 +195,10 @@ async function startServer() {
       // Check if it's an email (Google Login)
       if (code.includes('@')) {
         const email = code.trim().toLowerCase();
-        const currentCredits = checkAndRenewCredits(email);
-        const stmt = db.prepare("SELECT email, name, credits, subscription_type FROM users WHERE LOWER(email) = ?");
-        const user = stmt.get(email) as { email: string; name: string | null; credits: number; subscription_type: string } | undefined;
-        if (user) {
+        await checkAndRenewCredits(email);
+        const userDoc = await db.collection("users").doc(email).get();
+        if (userDoc.exists) {
+          const user = userDoc.data() as any;
           console.log("User found by email:", user.email);
           return res.json({ 
             email: user.email, 
@@ -276,20 +213,26 @@ async function startServer() {
 
       // For testing, if code is TEST123, we link it to test@shira.com
       if (code === "TEST123") {
-        const stmt = db.prepare("SELECT email, credits FROM users WHERE email = 'test@shira.com'");
-        const user = stmt.get() as { email: string; credits: number };
-        return res.json({ email: user.email, credits: user.credits, code: "TEST123" });
+        const userDoc = await db.collection("users").doc("test@shira.com").get();
+        if (userDoc.exists) {
+          const user = userDoc.data() as any;
+          return res.json({ email: user.email, credits: user.credits, code: "TEST123" });
+        }
       }
 
       // General check in access_codes
-      const stmt = db.prepare("SELECT code, credits FROM access_codes WHERE code = ? AND used = 0");
-      const row = stmt.get(code) as { code: string; credits: number } | undefined;
+      const codeDoc = await db.collection("access_codes").doc(code).get();
 
-      if (row) {
+      if (codeDoc.exists && !codeDoc.data()?.used) {
+        const row = codeDoc.data() as any;
         // Ensure user exists for this code
         const email = `user-${code}@temp.com`;
-        db.prepare("INSERT OR IGNORE INTO users (email, credits) VALUES (?, ?)").run(email, row.credits);
-        res.json({ email, credits: row.credits, code: row.code });
+        const userRef = db.collection("users").doc(email);
+        const userDoc = await userRef.get();
+        if (!userDoc.exists) {
+          await userRef.set({ email, credits: row.credits, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+        }
+        res.json({ email, credits: row.credits, code: row.code || code });
       } else {
         res.status(401).json({ error: "קוד גישה לא תקין או שכבר נוצל" });
       }
@@ -358,12 +301,20 @@ async function startServer() {
       const normalizedEmail = email.toLowerCase().trim();
       
       // Check if user exists
-      const existingUser = db.prepare("SELECT email FROM users WHERE LOWER(email) = ?").get(normalizedEmail);
-      if (existingUser) return res.status(400).json({ error: "משתמש עם אימייל זה כבר קיים במערכת" });
+      const userRef = db.collection("users").doc(normalizedEmail);
+      const userDoc = await userRef.get();
+      if (userDoc.exists) return res.status(400).json({ error: "משתמש עם אימייל זה כבר קיים במערכת" });
 
       const hashedPassword = await bcrypt.hash(password, 10);
       
-      db.prepare("INSERT INTO users (email, name, password_hash, credits) VALUES (?, ?, ?, ?)").run(normalizedEmail, name || '', hashedPassword, 5);
+      await userRef.set({ 
+        email: normalizedEmail, 
+        name: name || '', 
+        password_hash: hashedPassword, 
+        credits: 5,
+        subscription_type: 'free',
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
       
       res.json({ 
         success: true, 
@@ -384,10 +335,15 @@ async function startServer() {
       if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
 
       const normalizedEmail = email.toLowerCase().trim();
-      checkAndRenewCredits(normalizedEmail);
-      const user = db.prepare("SELECT email, name, password_hash, credits, subscription_type FROM users WHERE LOWER(email) = ?").get(normalizedEmail) as any;
+      await checkAndRenewCredits(normalizedEmail);
+      const userDoc = await db.collection("users").doc(normalizedEmail).get();
 
-      if (!user || !user.password_hash) {
+      if (!userDoc.exists) {
+        return res.status(401).json({ error: "אימייל או סיסמה לא נכונים" });
+      }
+      const user = userDoc.data() as any;
+
+      if (!user.password_hash) {
         return res.status(401).json({ error: "אימייל או סיסמה לא נכונים" });
       }
 
@@ -453,10 +409,22 @@ async function startServer() {
       console.log("Google OAuth success for email:", email);
 
       // Ensure user exists in DB
-      const stmt = db.prepare("INSERT INTO users (email, name, credits, last_renewal_date) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(email) DO UPDATE SET name = excluded.name");
-      stmt.run(email, name, 5); // Default 5 credits for new users
+      const userRef = db.collection("users").doc(email);
+      const userDoc = await userRef.get();
       
-      checkAndRenewCredits(email);
+      if (!userDoc.exists) {
+        await userRef.set({
+          email,
+          name,
+          credits: 5,
+          last_renewal_date: admin.firestore.FieldValue.serverTimestamp(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      } else {
+        await userRef.update({ name });
+      }
+      
+      await checkAndRenewCredits(email);
       console.log("User record ensured in DB for:", email);
 
       // Send success message to parent window
@@ -494,17 +462,16 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/user-info", (req, res) => {
+  app.post("/api/auth/user-info", async (req, res) => {
     try {
       const { email } = req.body;
       if (!email) return res.status(400).json({ error: "Email is required" });
 
-      const currentCredits = checkAndRenewCredits(email);
-      const stmt = db.prepare("SELECT email, credits FROM users WHERE email = ?");
-      const user = stmt.get(email) as { email: string; credits: number } | undefined;
+      await checkAndRenewCredits(email);
+      const userDoc = await db.collection("users").doc(email.toLowerCase().trim()).get();
 
-      if (user) {
-        res.json(user);
+      if (userDoc.exists) {
+        res.json(userDoc.data());
       } else {
         res.status(404).json({ error: "User not found" });
       }
@@ -513,55 +480,57 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/redeem", (req, res) => {
+  app.post("/api/auth/redeem", async (req, res) => {
     try {
       const { email, code } = req.body;
       if (!email || !code) return res.status(400).json({ error: "Email and code are required" });
 
-      const codeStmt = db.prepare("SELECT credits, used FROM access_codes WHERE code = ?");
-      const accessCode = codeStmt.get(code) as { credits: number; used: number } | undefined;
+      const normalizedEmail = email.toLowerCase().trim();
+      const codeRef = db.collection("access_codes").doc(code);
+      const codeDoc = await codeRef.get();
 
-      if (!accessCode) return res.status(404).json({ error: "קוד לא תקין" });
+      if (!codeDoc.exists) return res.status(404).json({ error: "קוד לא תקין" });
+      const accessCode = codeDoc.data() as any;
       if (accessCode.used) return res.status(400).json({ error: "הקוד כבר נוצל" });
 
-      const transaction = db.transaction(() => {
-        // Ensure user exists
-        db.prepare("INSERT OR IGNORE INTO users (email, credits) VALUES (?, 0)").run(email);
+      await db.runTransaction(async (transaction) => {
+        const userRef = db.collection("users").doc(normalizedEmail);
+        const userDoc = await transaction.get(userRef);
 
-        // Update user credits
-        const userStmt = db.prepare("UPDATE users SET credits = credits + ? WHERE email = ?");
-        userStmt.run(accessCode.credits, email);
+        if (!userDoc.exists) {
+          transaction.set(userRef, { 
+            email: normalizedEmail, 
+            credits: accessCode.credits,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        } else {
+          const currentCredits = userDoc.data()?.credits || 0;
+          transaction.update(userRef, { credits: currentCredits + accessCode.credits });
+        }
 
-        // Mark code as used
-        const updateCodeStmt = db.prepare("UPDATE access_codes SET used = 1, used_by = ?, used_at = CURRENT_TIMESTAMP WHERE code = ?");
-        updateCodeStmt.run(email, code);
+        transaction.update(codeRef, { 
+          used: true, 
+          usedBy: normalizedEmail, 
+          usedAt: admin.firestore.FieldValue.serverTimestamp() 
+        });
       });
-
-      transaction();
       
-      const userStmt = db.prepare("SELECT credits FROM users WHERE email = ?");
-      const user = userStmt.get(email) as { credits: number } | undefined;
-      
-      if (!user) {
-        throw new Error("Failed to find user after update");
-      }
-      
-      res.json({ success: true, credits: user.credits });
+      const updatedUserDoc = await db.collection("users").doc(normalizedEmail).get();
+      res.json({ success: true, credits: updatedUserDoc.data()?.credits });
     } catch (error) {
       console.error("Redeem error:", error);
       res.status(500).json({ error: "Failed to redeem code" });
     }
   });
 
-  app.post("/api/admin/update-credits", (req, res) => {
+  app.post("/api/admin/update-credits", async (req, res) => {
     try {
       const { adminEmail, targetEmail, credits } = req.body;
       if (adminEmail !== "shiraroth.z@gmail.com" && adminEmail !== "shira@lomdot.org") {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      const stmt = db.prepare("UPDATE users SET credits = ? WHERE email = ?");
-      stmt.run(credits, targetEmail);
+      await db.collection("users").doc(targetEmail.toLowerCase().trim()).update({ credits });
       res.json({ success: true });
     } catch (error) {
       console.error("Error updating credits:", error);
@@ -569,16 +538,15 @@ async function startServer() {
     }
   });
 
-  app.get("/api/admin/users", (req, res) => {
+  app.get("/api/admin/users", async (req, res) => {
     try {
       const { email } = req.query;
-      // Simple check: only shiraroth.z@gmail.com or shira@lomdot.org can see this
       if (email !== "shiraroth.z@gmail.com" && email !== "shira@lomdot.org") {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      const stmt = db.prepare("SELECT email, name, credits, created_at FROM users ORDER BY created_at DESC");
-      const users = stmt.all();
+      const snapshot = await db.collection("users").orderBy("createdAt", "desc").get();
+      const users = snapshot.docs.map(doc => doc.data());
       res.json(users);
     } catch (error) {
       console.error("Error fetching users:", error);
@@ -586,7 +554,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/admin/add-credits", (req, res) => {
+  app.post("/api/admin/add-credits", async (req, res) => {
     try {
       const { code, credits, secret } = req.body;
       const adminSecret = process.env.ADMIN_SECRET;
@@ -595,8 +563,12 @@ async function startServer() {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      const stmt = db.prepare("INSERT INTO access_codes (code, credits) VALUES (?, ?)");
-      stmt.run(code, credits);
+      await db.collection("access_codes").doc(code).set({
+        code,
+        credits,
+        used: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp()
+      });
 
       res.json({ success: true, message: `Code ${code} created with ${credits} credits` });
     } catch (error) {
@@ -606,7 +578,7 @@ async function startServer() {
   });
 
   // Meshulam Webhook
-  app.post("/api/webhooks/meshulam", (req, res) => {
+  app.post("/api/webhooks/meshulam", async (req, res) => {
     try {
       console.log("Meshulam Webhook received:", req.body);
       
@@ -663,39 +635,47 @@ async function startServer() {
         // Generate a unique code
         const newCode = `EXAM-${uuidv4().substring(0, 8).toUpperCase()}`;
         
-        const transaction = db.transaction(() => {
+        await db.runTransaction(async (transaction) => {
           // Save purchase
-          db.prepare(`
-            INSERT INTO purchases (id, email, amount, credits, status, transaction_id, raw_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).run(uuidv4(), email, amount, creditsToGive, 'success', transaction_id, JSON.stringify(req.body));
+          const purchaseRef = db.collection("purchases").doc(uuidv4());
+          transaction.set(purchaseRef, {
+            email,
+            amount,
+            credits: creditsToGive,
+            status: 'success',
+            transaction_id,
+            raw_data: JSON.stringify(req.body),
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
 
           // Create access code (NOT auto-redeemed, user must enter it manually)
-          db.prepare("INSERT INTO access_codes (code, credits) VALUES (?, ?)").run(newCode, creditsToGive);
+          const codeRef = db.collection("access_codes").doc(newCode);
+          transaction.set(codeRef, {
+            code: newCode,
+            credits: creditsToGive,
+            used: false,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
           
           // If monthly, update user directly as well (Monthly is a subscription, usually tied to the account)
           if (isMonthly) {
             const isAnnual = amount === 294;
             const subType = isAnnual ? 'annual' : 'monthly';
-            const endDate = isAnnual ? "datetime('now', '+1 year')" : "NULL";
+            const userRef = db.collection("users").doc(email.toLowerCase().trim());
             
-            db.prepare(`
-              UPDATE users 
-              SET subscription_type = ?, 
-                  monthly_allowance = ?, 
-                  last_renewal_date = CURRENT_TIMESTAMP,
-                  subscription_end_date = ${endDate}
-              WHERE LOWER(email) = ?
-            `).run(subType, creditsToGive, email.toLowerCase());
+            transaction.update(userRef, {
+              subscription_type: subType,
+              monthly_allowance: creditsToGive,
+              last_renewal_date: admin.firestore.FieldValue.serverTimestamp(),
+              subscription_end_date: isAnnual ? admin.firestore.Timestamp.fromDate(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)) : null
+            });
           }
         });
 
-        transaction();
-        
         console.log(`Successfully processed payment for ${email}. Generated code: ${newCode}`);
         
         // Send email to user
-        sendCodeEmail(email, newCode, creditsToGive);
+        await sendCodeEmail(email, newCode, creditsToGive);
       }
 
       // Always return 200 to Meshulam to acknowledge receipt
@@ -706,29 +686,33 @@ async function startServer() {
     }
   });
 
-  app.get("/api/user/codes", (req, res) => {
+  app.get("/api/user/codes", async (req, res) => {
     try {
       const { email } = req.query;
       if (!email) return res.status(400).json({ error: "Email is required" });
 
-      // Find codes generated for this email via purchases
-      // Or codes used by this email
-      const codes = db.prepare(`
-        SELECT c.code, c.credits, c.used, c.used_at, c.created_at
-        FROM access_codes c
-        LEFT JOIN purchases p ON p.email = ?
-        WHERE c.used_by = ? OR (p.email = ? AND c.code LIKE 'EXAM-%' AND c.created_at >= p.created_at)
-        GROUP BY c.code
-        ORDER BY c.created_at DESC
-      `).all(email, email, email);
+      const normalizedEmail = email.toString().toLowerCase().trim();
+      
+      // Get codes used by this user
+      const usedSnapshot = await db.collection("access_codes").where("usedBy", "==", normalizedEmail).get();
+      const usedCodes = usedSnapshot.docs.map(doc => doc.data());
+      
+      // Get codes purchased by this user (EXAM- prefix)
+      const purchasedSnapshot = await db.collection("access_codes").where("purchasedBy", "==", normalizedEmail).get();
+      const purchasedCodes = purchasedSnapshot.docs.map(doc => doc.data());
 
-      res.json(codes);
+      // Combine and unique
+      const allCodes = [...usedCodes, ...purchasedCodes];
+      const uniqueCodes = Array.from(new Map(allCodes.map(item => [item['code'], item])).values());
+      
+      res.json(uniqueCodes);
     } catch (error) {
+      console.error("Error fetching user codes:", error);
       res.status(500).json({ error: "Failed to fetch codes" });
     }
   });
 
-  app.post("/api/admin/simulate-purchase", (req, res) => {
+  app.post("/api/admin/simulate-purchase", async (req, res) => {
     try {
       const { email, amount, adminEmail } = req.body;
       if (adminEmail !== "shiraroth.z@gmail.com" && adminEmail !== "shira@lomdot.org") {
@@ -736,19 +720,9 @@ async function startServer() {
       }
       if (!email) return res.status(400).json({ error: "Email is required" });
 
-      // Simulate Meshulam Webhook payload
-      const mockPayload = {
-        status: "1",
-        sum: amount || "50",
-        transaction_id: `MOCK-${uuidv4().substring(0, 8)}`,
-        custom_fields: JSON.stringify({ email })
-      };
-
-      // Call the webhook logic internally or just trigger it via fetch
-      // For simplicity, we'll just trigger the same logic here
+      const purchaseAmount = parseFloat(amount || "50");
       let creditsToGive = 5;
       let isMonthly = false;
-      const purchaseAmount = parseFloat(mockPayload.sum);
       
       if (purchaseAmount === 35) {
         creditsToGive = 50;
@@ -761,30 +735,37 @@ async function startServer() {
 
       const newCode = `EXAM-${uuidv4().substring(0, 8).toUpperCase()}`;
       
-      const transaction = db.transaction(() => {
-        db.prepare(`
-          INSERT INTO purchases (id, email, amount, credits, status, transaction_id, raw_data)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(uuidv4(), email, purchaseAmount, creditsToGive, 'success', mockPayload.transaction_id, JSON.stringify(mockPayload));
+      await db.runTransaction(async (transaction) => {
+        const purchaseRef = db.collection("purchases").doc(uuidv4());
+        transaction.set(purchaseRef, {
+          email,
+          amount: purchaseAmount,
+          credits: creditsToGive,
+          status: 'success',
+          transaction_id: `MOCK-${uuidv4().substring(0, 8)}`,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
 
-        db.prepare("INSERT INTO access_codes (code, credits) VALUES (?, ?)").run(newCode, creditsToGive);
+        const codeRef = db.collection("access_codes").doc(newCode);
+        transaction.set(codeRef, {
+          code: newCode,
+          credits: creditsToGive,
+          used: false,
+          purchasedBy: email.toLowerCase().trim(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
 
         if (isMonthly) {
-          db.prepare(`
-            UPDATE users 
-            SET subscription_type = 'monthly', 
-                monthly_allowance = ?, 
-                last_renewal_date = CURRENT_TIMESTAMP 
-            WHERE LOWER(email) = ?
-          `).run(creditsToGive, email.toLowerCase());
+          const userRef = db.collection("users").doc(email.toLowerCase().trim());
+          transaction.update(userRef, {
+            subscription_type: 'monthly',
+            monthly_allowance: creditsToGive,
+            last_renewal_date: admin.firestore.FieldValue.serverTimestamp()
+          });
         }
       });
 
-      transaction();
-
-      // Send email to user
-      sendCodeEmail(email, newCode, creditsToGive);
-
+      await sendCodeEmail(email, newCode, creditsToGive);
       res.json({ success: true, code: newCode, credits: creditsToGive });
     } catch (error) {
       console.error("Simulation error:", error);
@@ -792,50 +773,45 @@ async function startServer() {
     }
   });
 
-  app.get("/api/public/settings", (req, res) => {
+  app.get("/api/public/settings", async (req, res) => {
     try {
-      const logoRow = db.prepare("SELECT value FROM settings WHERE key = 'LOGO_URL'").get() as { value: string } | undefined;
-      const gateLogoRow = db.prepare("SELECT value FROM settings WHERE key = 'GATE_LOGO_URL'").get() as { value: string } | undefined;
-      const appNameRow = db.prepare("SELECT value FROM settings WHERE key = 'APP_NAME'").get() as { value: string } | undefined;
-      const supportEmailRow = db.prepare("SELECT value FROM settings WHERE key = 'SUPPORT_EMAIL'").get() as { value: string } | undefined;
-      const geminiKeyRow = db.prepare("SELECT value FROM settings WHERE key = 'GEMINI_API_KEY'").get() as { value: string } | undefined;
-      
-      res.json({ 
-        LOGO_URL: logoRow?.value || "",
-        GATE_LOGO_URL: gateLogoRow?.value || "",
-        APP_NAME: appNameRow?.value || "ExamAccess Pro",
-        SUPPORT_EMAIL: supportEmailRow?.value || "shira@lomdot.org",
-        GEMINI_API_KEY: geminiKeyRow?.value || ""
-      });
+      const settings = {
+        LOGO_URL: await getSetting("LOGO_URL") || "",
+        GATE_LOGO_URL: await getSetting("GATE_LOGO_URL") || "",
+        APP_NAME: await getSetting("APP_NAME") || "ExamAccess Pro",
+        SUPPORT_EMAIL: await getSetting("SUPPORT_EMAIL") || "shira@lomdot.org",
+        GEMINI_API_KEY: await getSetting("GEMINI_API_KEY") || ""
+      };
+      res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch public settings" });
     }
   });
 
-  app.get("/api/admin/settings", (req, res) => {
+  app.get("/api/admin/settings", async (req, res) => {
     try {
       const { email } = req.query;
       if (email !== "shiraroth.z@gmail.com" && email !== "shira@lomdot.org") return res.status(403).json({ error: "Unauthorized" });
 
-      const rows = db.prepare("SELECT key, value FROM settings").all() as { key: string, value: string }[];
-      const settings = rows.reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {});
+      const snapshot = await db.collection("settings").get();
+      const settings = snapshot.docs.reduce((acc, doc) => ({ ...acc, [doc.id]: doc.data().value }), {});
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
     }
   });
 
-  app.post("/api/admin/settings", (req, res) => {
+  app.post("/api/admin/settings", async (req, res) => {
     try {
       const { email, settings } = req.body;
       if (email !== "shiraroth.z@gmail.com" && email !== "shira@lomdot.org") return res.status(403).json({ error: "Unauthorized" });
 
-      const transaction = db.transaction(() => {
-        for (const [key, value] of Object.entries(settings)) {
-          db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(key, value);
-        }
-      });
-      transaction();
+      const batch = db.batch();
+      for (const [key, value] of Object.entries(settings)) {
+        const ref = db.collection("settings").doc(key);
+        batch.set(ref, { value });
+      }
+      await batch.commit();
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to update settings" });
@@ -851,9 +827,9 @@ async function startServer() {
 
       console.log(`School interest from ${schoolName}: ${contactName} (${email})`);
 
-      const transporter = createTransporter();
+      const transporter = await createTransporter();
       if (transporter) {
-        const adminEmail = process.env.SMTP_USER || getSetting("SMTP_USER");
+        const adminEmail = process.env.SMTP_USER || await getSetting("SMTP_USER");
         await transporter.sendMail({
           from: `"ExamAccess School Interest" <${adminEmail}>`,
           to: "shira@lomdot.org",
@@ -892,9 +868,9 @@ async function startServer() {
 
       console.log(`Contact request from ${name} (${email}): ${message}`);
 
-      const transporter = createTransporter();
+      const transporter = await createTransporter();
       if (transporter) {
-        const adminEmail = process.env.SMTP_USER || getSetting("SMTP_USER");
+        const adminEmail = process.env.SMTP_USER || await getSetting("SMTP_USER");
         await transporter.sendMail({
           from: `"ExamAccess Contact" <${adminEmail}>`,
           to: "shira@lomdot.org",
@@ -920,11 +896,10 @@ async function startServer() {
     }
   });
 
-  app.post("/api/tests", (req, res) => {
+  app.post("/api/tests", async (req, res) => {
     try {
       let { data, email, code } = req.body;
       
-      // If code is an email, treat it as email
       if (code && code.includes('@')) {
         email = code;
       }
@@ -932,46 +907,28 @@ async function startServer() {
       if (!email && !code) return res.status(401).json({ error: "User identification required" });
 
       const id = uuidv4();
-      const ownerEmail = email ? email.toLowerCase().trim() : null;
+      const ownerEmail = email ? email.toLowerCase().trim() : `user-${code}@temp.com`;
       
-      const transaction = db.transaction(() => {
-        if (code === "TEST123" || email === "test@shira.com") {
-          const checkStmt = db.prepare("SELECT credits FROM users WHERE email = 'test@shira.com'");
-          const user = checkStmt.get() as { credits: number };
-          if (user.credits <= 0) throw new Error("No credits remaining");
-
-          const insertStmt = db.prepare("INSERT INTO tests (id, data, owner_email) VALUES (?, ?, ?)");
-          insertStmt.run(id, JSON.stringify(data), 'test@shira.com');
-
-          const deductStmt = db.prepare("UPDATE users SET credits = credits - 1 WHERE email = 'test@shira.com'");
-          deductStmt.run();
-        } else if (email) {
-          const checkStmt = db.prepare("SELECT credits FROM users WHERE email = ?");
-          const user = checkStmt.get(email.toLowerCase().trim()) as { credits: number } | undefined;
-          if (!user || user.credits <= 0) throw new Error("No credits remaining");
-
-          const insertStmt = db.prepare("INSERT INTO tests (id, data, owner_email) VALUES (?, ?, ?)");
-          insertStmt.run(id, JSON.stringify(data), email.toLowerCase().trim());
-
-          const deductStmt = db.prepare("UPDATE users SET credits = credits - 1 WHERE email = ?");
-          deductStmt.run(email.toLowerCase().trim());
-        } else if (code) {
-          // This part is for temporary users created via access code redemption
-          // But usually they get an email like user-code@temp.com
-          const tempEmail = `user-${code}@temp.com`;
-          const checkStmt = db.prepare("SELECT credits FROM users WHERE email = ?");
-          const user = checkStmt.get(tempEmail) as { credits: number } | undefined;
-          if (!user || user.credits <= 0) throw new Error("No credits remaining");
-
-          const insertStmt = db.prepare("INSERT INTO tests (id, data, owner_email) VALUES (?, ?, ?)");
-          insertStmt.run(id, JSON.stringify(data), tempEmail);
-
-          const deductStmt = db.prepare("UPDATE users SET credits = credits - 1 WHERE email = ?");
-          deductStmt.run(tempEmail);
+      await db.runTransaction(async (transaction) => {
+        const userRef = db.collection("users").doc(ownerEmail);
+        const userDoc = await transaction.get(userRef);
+        
+        if (!userDoc.exists || (userDoc.data()?.credits || 0) <= 0) {
+          throw new Error("No credits remaining");
         }
-      });
 
-      transaction();
+        const testRef = db.collection("tests").doc(id);
+        transaction.set(testRef, {
+          id,
+          data: JSON.stringify(data),
+          ownerEmail,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        transaction.update(userRef, { 
+          credits: (userDoc.data()?.credits || 0) - 1 
+        });
+      });
       
       res.json({ id });
     } catch (error: any) {
@@ -980,19 +937,24 @@ async function startServer() {
     }
   });
 
-  app.get("/api/user/tests", (req, res) => {
+  app.get("/api/user/tests", async (req, res) => {
     try {
       const { email } = req.query;
       if (!email) return res.status(400).json({ error: "Email is required" });
 
-      const stmt = db.prepare("SELECT id, data, created_at FROM tests WHERE owner_email = ? ORDER BY created_at DESC");
-      const rows = stmt.all(email.toString().toLowerCase().trim()) as { id: string, data: string, created_at: string }[];
+      const snapshot = await db.collection("tests")
+        .where("ownerEmail", "==", email.toString().toLowerCase().trim())
+        .orderBy("createdAt", "desc")
+        .get();
       
-      const tests = rows.map(row => ({
-        id: row.id,
-        title: JSON.parse(row.data).title || "מבחן ללא כותרת",
-        created_at: row.created_at
-      }));
+      const tests = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: data.id,
+          title: JSON.parse(data.data).title || "מבחן ללא כותרת",
+          created_at: data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString()
+        };
+      });
 
       res.json(tests);
     } catch (error) {
@@ -1001,14 +963,13 @@ async function startServer() {
     }
   });
 
-  app.get("/api/tests/:id", (req, res) => {
+  app.get("/api/tests/:id", async (req, res) => {
     try {
       const { id } = req.params;
-      const stmt = db.prepare("SELECT data FROM tests WHERE id = ?");
-      const row = stmt.get(id) as { data: string } | undefined;
+      const doc = await db.collection("tests").doc(id).get();
       
-      if (row) {
-        res.json(JSON.parse(row.data));
+      if (doc.exists) {
+        res.json(JSON.parse(doc.data()?.data));
       } else {
         res.status(404).json({ error: "Test not found" });
       }

@@ -1,0 +1,60 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and credits",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "credits": { "type": "integer" },
+        "subscriptionType": { "type": "string", "enum": ["free", "monthly", "annual", "admin"] },
+        "lastRenewalDate": { "type": "string", "format": "date-time" },
+        "monthlyAllowance": { "type": "integer" },
+        "subscriptionEndDate": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "credits"]
+    },
+    "Test": {
+      "title": "Test",
+      "description": "Exam data",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "data": { "type": "object" },
+        "ownerEmail": { "type": "string", "format": "email" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "data"]
+    },
+    "AccessCode": {
+      "title": "Access Code",
+      "description": "Prepaid credits code",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "credits": { "type": "integer" },
+        "used": { "type": "boolean" },
+        "usedBy": { "type": "string", "format": "email" },
+        "usedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["code", "credits"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/tests/{testId}": {
+      "schema": "Test",
+      "description": "Saved tests"
+    },
+    "/access_codes/{code}": {
+      "schema": "AccessCode",
+      "description": "Access codes for credits"
+    }
+  }
+}
