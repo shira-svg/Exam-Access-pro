@@ -71,8 +71,8 @@ export default function App() {
   const [appUrl, setAppUrl] = React.useState('');
   const [accessCode, setAccessCode] = React.useState(localStorage.getItem('accessCode') || '');
   const [userEmail, setUserEmail] = React.useState(localStorage.getItem('userEmail') || '');
-  const [userName, setUserName] = React.useState('');
-  const [isLoggedIn, setIsLoggedIn] = React.useState(false);
+  const [userName, setUserName] = React.useState(localStorage.getItem('userName') || '');
+  const [isLoggedIn, setIsLoggedIn] = React.useState(!!localStorage.getItem('userEmail'));
   const [credits, setCredits] = React.useState<number | null>(null);
   const [subscriptionType, setSubscriptionType] = React.useState<'free' | 'monthly' | 'admin'>('free');
   const [userTests, setUserTests] = React.useState<any[]>([]);
@@ -469,8 +469,10 @@ export default function App() {
         // onAuthStateChanged will handle the state update
       } catch (error: any) {
         console.error("Login error:", error);
-        if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-          setLoginError('אימייל או סיסמה לא נכונים');
+        if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+          setLoginError('משתמש לא נמצא. אם זו הפעם הראשונה, התחברי עם גוגל או הירשמי.');
+        } else if (error.code === 'auth/wrong-password') {
+          setLoginError('סיסמה לא נכונה');
         } else {
           setLoginError('שגיאה בהתחברות. נסה שוב מאוחר יותר.');
         }

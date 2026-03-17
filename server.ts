@@ -20,11 +20,9 @@ if (!admin.apps.length) {
   });
 }
 
-const db = admin.firestore();
-if (firebaseConfig.firestoreDatabaseId) {
-  // Note: In some SDK versions, you might need to specify the databaseId differently
-  // but for now we'll assume the default or configured one.
-}
+const db = firebaseConfig.firestoreDatabaseId 
+  ? (admin.app() as any).firestore(firebaseConfig.firestoreDatabaseId)
+  : admin.firestore();
 
 // Email Transporter Setup
 const getSetting = async (key: string) => {
