@@ -13,7 +13,9 @@ import {
   signOut, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
-  updateProfile
+  updateProfile,
+  setPersistence,
+  browserLocalPersistence
 } from 'firebase/auth';
 import { 
   doc, 
@@ -69,8 +71,8 @@ export default function App() {
   const [appUrl, setAppUrl] = React.useState('');
   const [accessCode, setAccessCode] = React.useState(localStorage.getItem('accessCode') || '');
   const [userEmail, setUserEmail] = React.useState(localStorage.getItem('userEmail') || '');
-  const [userName, setUserName] = React.useState(localStorage.getItem('userName') || '');
-  const [isLoggedIn, setIsLoggedIn] = React.useState(!!localStorage.getItem('userEmail'));
+  const [userName, setUserName] = React.useState('');
+  const [isLoggedIn, setIsLoggedIn] = React.useState(false);
   const [credits, setCredits] = React.useState<number | null>(null);
   const [subscriptionType, setSubscriptionType] = React.useState<'free' | 'monthly' | 'admin'>('free');
   const [userTests, setUserTests] = React.useState<any[]>([]);
@@ -86,6 +88,9 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = React.useState(false);
 
   React.useEffect(() => {
+    // Set persistence to local to ensure session survives refresh
+    setPersistence(auth, browserLocalPersistence).catch(err => console.error("Persistence error:", err));
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setIsLoggedIn(true);
