@@ -238,8 +238,11 @@ export default function App() {
 
   React.useEffect(() => {
     fetchConfig();
-    fetchSettings();
   }, []);
+
+  React.useEffect(() => {
+    fetchSettings();
+  }, [userEmail]);
 
   const fetchSettings = async () => {
     try {
@@ -248,12 +251,9 @@ export default function App() {
         const pubData = await pubResponse.json();
         setSmtpSettings(prev => ({ 
           ...prev, 
-          LOGO_URL: pubData.LOGO_URL || prev.LOGO_URL,
-          GATE_LOGO_URL: pubData.GATE_LOGO_URL || prev.GATE_LOGO_URL,
-          APP_NAME: pubData.APP_NAME || prev.APP_NAME,
-          SUPPORT_EMAIL: pubData.SUPPORT_EMAIL || prev.SUPPORT_EMAIL,
-          GEMINI_API_KEY: pubData.GEMINI_API_KEY || prev.GEMINI_API_KEY
+          ...pubData
         }));
+        
         if (pubData.GEMINI_API_KEY) {
           setManualApiKey(pubData.GEMINI_API_KEY);
           setApiKeyConfigured(true);
@@ -262,18 +262,29 @@ export default function App() {
     } catch (e) {
       console.error("Failed to fetch public settings", e);
     }
-
-    if (userEmail !== 'shiraroth.z@gmail.com' && userEmail !== 'shira@lomdot.org') return;
-    try {
-      const response = await fetch(`/api/admin/settings?email=${userEmail}`);
-      if (response.ok) {
-        const data = await response.json();
-        setSmtpSettings(prev => ({ ...prev, ...data }));
-      }
-    } catch (e) {
-      console.error("Failed to fetch settings", e);
-    }
   };
+
+  // Real-time settings for admins
+  React.useEffect(() => {
+    if (!userEmail || (userEmail !== 'shiraroth.z@gmail.com' && userEmail !== 'shira@lomdot.org')) {
+      return;
+    }
+
+    const unsubscribe = onSnapshot(collection(db, 'settings'), (snapshot) => {
+      const newSettings: any = { ...smtpSettings };
+      snapshot.forEach(doc => {
+        newSettings[doc.id] = doc.data().value;
+      });
+      setSmtpSettings(prev => ({ ...prev, ...newSettings }));
+      
+      if (newSettings.GEMINI_API_KEY) {
+        setManualApiKey(newSettings.GEMINI_API_KEY);
+        setApiKeyConfigured(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [userEmail]);
 
   const saveSettings = async () => {
     setIsSavingSettings(true);
@@ -982,7 +993,7 @@ export default function App() {
               <div className="flex items-center gap-3 sm:gap-6">
                 <button onClick={() => setActiveTab('pricing')} className={`hover:text-teal-600 transition-colors ${activeTab === 'pricing' ? 'text-teal-600' : ''}`}>חבילות ומבצעים</button>
                 <button onClick={() => setActiveTab('contact')} className={`hover:text-teal-600 transition-colors ${activeTab === 'contact' ? 'text-teal-600' : ''}`}>צור קשר</button>
-                { (userEmail === 'shiraroth.z@gmail.com' || userEmail === 'shira@lomdot.org') && (
+                { (userEmail === 'shiraroth.z@gmail.com' || userEmail === 'shira@lomdot.org' || subscriptionType === 'admin') && (
                   <button onClick={() => setActiveTab('admin')} className={`flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all ${activeTab === 'admin' ? 'bg-teal-600 text-white' : 'text-teal-600 bg-teal-50 hover:bg-teal-100'}`}>
                     <Settings size={14} />
                     <span>ניהול</span>

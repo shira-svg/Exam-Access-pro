@@ -791,12 +791,20 @@ async function startServer() {
   app.get("/api/admin/settings", async (req, res) => {
     try {
       const { email } = req.query;
-      if (email !== "shiraroth.z@gmail.com" && email !== "shira@lomdot.org") return res.status(403).json({ error: "Unauthorized" });
+      if (!email) return res.status(400).json({ error: "Email is required" });
+      
+      const userDoc = await db.collection("users").doc(email as string).get();
+      const isAdmin = email === "shiraroth.z@gmail.com" || 
+                      email === "shira@lomdot.org" || 
+                      userDoc.data()?.subscriptionType === "admin";
+
+      if (!isAdmin) return res.status(403).json({ error: "Unauthorized" });
 
       const snapshot = await db.collection("settings").get();
       const settings = snapshot.docs.reduce((acc, doc) => ({ ...acc, [doc.id]: doc.data().value }), {});
       res.json(settings);
     } catch (error) {
+      console.error("Error fetching admin settings:", error);
       res.status(500).json({ error: "Failed to fetch settings" });
     }
   });
@@ -804,7 +812,14 @@ async function startServer() {
   app.post("/api/admin/settings", async (req, res) => {
     try {
       const { email, settings } = req.body;
-      if (email !== "shiraroth.z@gmail.com" && email !== "shira@lomdot.org") return res.status(403).json({ error: "Unauthorized" });
+      if (!email) return res.status(400).json({ error: "Email is required" });
+
+      const userDoc = await db.collection("users").doc(email).get();
+      const isAdmin = email === "shiraroth.z@gmail.com" || 
+                      email === "shira@lomdot.org" || 
+                      userDoc.data()?.subscriptionType === "admin";
+
+      if (!isAdmin) return res.status(403).json({ error: "Unauthorized" });
 
       const batch = db.batch();
       for (const [key, value] of Object.entries(settings)) {
@@ -814,6 +829,7 @@ async function startServer() {
       await batch.commit();
       res.json({ success: true });
     } catch (error) {
+      console.error("Error updating settings:", error);
       res.status(500).json({ error: "Failed to update settings" });
     }
   });
@@ -979,14 +995,22 @@ async function startServer() {
     }
   });
 
-  app.get("/api/config", (req, res) => {
-    const key = process.env.GEMINI_API_KEY || process.env.API_KEY || process.env.VITE_API_KEY;
-    const isAvailable = !!key && key !== "MY_GEMINI_API_KEY" && key.length > 10;
-    res.json({ 
-      systemKeyAvailable: isAvailable,
-      apiKey: isAvailable ? key : null,
-      appUrl: process.env.APP_URL || ""
-    });
+  app.get("/api/config", async (req, res) => {
+    try {
+      const envKey = process.env.GEMINI_API_KEY || process.env.API_KEY || process.env.VITE_API_KEY;
+      const dbKey = await getSetting("GEMINI_API_KEY");
+      const key = dbKey || envKey;
+      
+      const isAvailable = !!key && key !== "MY_GEMINI_API_KEY" && key.length > 10;
+      res.json({ 
+        systemKeyAvailable: isAvailable,
+        apiKey: isAvailable ? key : null,
+        appUrl: process.env.APP_URL || ""
+      });
+    } catch (error) {
+      console.error("Error fetching config:", error);
+      res.status(500).json({ error: "Failed to fetch config" });
+    }
   });
 
   // Vite middleware for development or if production build is missing
