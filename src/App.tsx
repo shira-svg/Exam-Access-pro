@@ -536,6 +536,13 @@ export default function App() {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
       
+      // Update state immediately to avoid flicker
+      setIsLoggedIn(true);
+      setUserEmail(user.email || '');
+      setUserName(user.displayName || '');
+      localStorage.setItem('userEmail', user.email || '');
+      localStorage.setItem('userName', user.displayName || '');
+
       // Ensure user document exists in Firestore
       const userRef = doc(db, 'users', user.email!.toLowerCase().trim());
       const userDoc = await getDoc(userRef);
@@ -1072,7 +1079,12 @@ export default function App() {
       )}
 
       <main className={`max-w-4xl mx-auto px-6 ${isStudentOnly ? 'py-6' : 'py-12'}`} onMouseDown={handleMouseDown}>
-        {isLoadingTest ? (
+        {!isAuthReady ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <Loader2 className="animate-spin text-teal-600" size={48} />
+            <p className="text-slate-600 font-medium">בודק חיבור...</p>
+          </div>
+        ) : isLoadingTest ? (
           <div className="flex flex-col items-center justify-center py-20 gap-4"><Loader2 className="animate-spin text-teal-600" size={48} /><p className="text-slate-600 font-medium">טוען את המבחן...</p></div>
         ) : (
           <AnimatePresence mode="wait">
