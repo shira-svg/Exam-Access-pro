@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Assistant", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    direction: rtl;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
+  /* Improve Hebrew Niqqud positioning */
+  textarea, input {
+    font-variant-ligatures: common-ligatures;
+    font-feature-settings: "kern" 1, "liga" 1;
+    font-family: "Assistant", "SBL Hebrew", "David Libre", serif;
+  }
+}
+
+.markdown-body h1 { @apply text-2xl font-bold mb-4; }
+.markdown-body p { @apply mb-4 leading-relaxed; }
+.custom-scrollbar::-webkit-scrollbar { width: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { @apply bg-slate-200 rounded-full; }
+
+/* Specific fix for Hebrew Niqqud in textareas */
+textarea[data-niqqud="true"] {
+  line-height: 1.8 !important;
+  font-size: 1.1rem;
+}

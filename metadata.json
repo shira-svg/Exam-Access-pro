@@ -1,0 +1,7 @@
+{
+  "name": " ExamAccess 2 Pro",
+  "description": "מערכת להנגשת מבחנים לתלמידים בעזרת בינה מלאכותית, כולל חילוץ טקסט מתמונות והקראה קולית.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
